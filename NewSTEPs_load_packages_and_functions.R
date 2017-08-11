@@ -48,6 +48,10 @@ if (exists("start_date")) {
   
 }
 
+# Convert start and end date for use in file titles
+start_date_file <- gsub("/", "-", start_date)
+end_date_file <- gsub("/", "-", end_date)
+
 removeExamples <- function(examples, df) {
   
   # Removes from call log data any rows that appear
@@ -153,6 +157,18 @@ analytes_check <- c("T4", "TSH", "PKU", "MSUD", "HCU", "GALT", "GALH", "TGAL", "
                     "C16_OH", "C18_1_OH", "C2", "C3", "C3_C2", "C4_DC", "C5", "C5_1", "C5_DC",
                     "C5_OH", "TYR", "CIT", "PHE_TYR", "IRT", "CF", "SUAC", "TREC")
 
+# Identify columns we need to have for sample data
+sample_cols = c("SAMPLEID", "BIRTHDATE", "BIRTHTIME", "COLLECTIONDATE", "COLLECTIONTIME", "RECEIVEDATE", 
+                "RECEIVETIME", "RELEASEDATE", "UNSATCODE", "UNSATDESC", "RECALL_FLAG", "CATEGORY", 
+                analytes_check)
+
+# Identify columns we need to have for call log data
+call_log_cols = c("EXTERNAL_ID", "Critical.1", "Critical.2", "Critical.3", "Critical.4", 
+                  "Critical.5", "Date.of.Call")
+
+# Identify columns we need to have for approve log data
+approve_log_cols = c("Control.ID", "Test.Name", "Approved.Date", "Task.Appr.Status")
+
 col_check <- function(folder, type) {
   
   # Checks that a given list of files have the correct columns, returns
@@ -166,16 +182,13 @@ col_check <- function(folder, type) {
   bad_files = c()
   
   if (type == "sample") {
-    cols = c("SAMPLEID", "BIRTHDATE", "BIRTHTIME", "COLLECTIONDATE", "COLLECTIONTIME", "RECEIVEDATE", 
-             "RECEIVETIME", "RELEASEDATE", "UNSATCODE", "UNSATDESC", "RECALL_FLAG", "CATEGORY", 
-             analytes_check)
+    cols =  sample_cols
     separator = "|"
   } else if (type == "call_log") {
-    cols = c("EXTERNAL_ID", "Critical.1", "Critical.2", "Critical.3", "Critical.4", 
-             "Critical.5", "Date.of.Call")
+    cols = call_log_cols
     separator = ","
   } else if (type == "approve_log") {
-    cols = c("Control.ID", "Test.Name", "Approved.Date", "Task.Appr.Status")
+    cols = approve_log_cols
     separator = ","
   }
   
@@ -360,6 +373,16 @@ read_data <- function(folder, patt=NULL, separator, type, ...) {
     
   }
   
+  # Remove unneeded columns
+  if (type == "sample") {
+    cols = sample_cols
+  } else if (type == "call_log") {
+    cols = call_log_cols
+  } else if (type == "approve_log") {
+    cols = approve_log_cols
+  }
+  initial_dd <- subset(initial_dd, select=cols)
+  
   # Reformat and repair any specified columns as dates
   if (length(date_cols) > 0) {
     initial_dd <- date_reformat(initial_dd, date_cols)
@@ -377,9 +400,12 @@ read_data <- function(folder, patt=NULL, separator, type, ...) {
   }
   
   # If dataframe has CATEGORY column, remove any records that have category listed as "Proficiency", 
-  # "Treatment", or "Treatment - PKU"
+  # "Treatment", or "Treatment - PKU", then remove CATEGORY
   remove_cats <- c("Proficiency","Treatment","Treatment - PKU")
-  if (!is.null(initial_dd$CATEGORY)) {initial_dd <- initial_dd[!(initial_dd$CATEGORY %in% remove_cats),]}
+  if (!is.null(initial_dd$CATEGORY)) {
+    initial_dd <- initial_dd[!(initial_dd$CATEGORY %in% remove_cats),]
+    initial_dd$CATEGORY <- NULL
+  }
   
   # For approve_log data:
   if (type == "approve_log") {
@@ -435,6 +461,107 @@ read_data <- function(folder, patt=NULL, separator, type, ...) {
   return(initial_dd)
   
 }
+
+report_and_repair_differences <- function(df, id, data_type) {
+  
+  # Given a dataframe and an ID column, identify all duplicated
+  # IDs as well as any columns for those IDs that have 
+  # differing values.
+  
+  # Generates a warning if such samples exist, creates
+  # an ancillary report listing them, and changes the values
+  # for columns with differing values to NAs.
+  
+  # Identify set of columns we want to evaluate for
+  # duplicates and obtain SAMPLEIDs with duplicates. This 
+  # differs for sample and diagnosis data. For diagnosis data, 
+  # we only want cases where there are differing values for 
+  # DIAGNOSISDATE for the same sample ID (when everything else
+  # about the sample is the same)
+  if (data_type == "sample") {
+    cols = colnames(df)[!colnames(df) %in% "SAMPLEID"]
+    eval_cols = NULL
+    col_text = "at\nleast one column"
+  } else if (data_type == "critical reporting") {
+    cols = "Date.of.Call"
+    eval_cols = NULL
+    col_text = "the\ndate of call column"
+  }
+  
+  # Get ids that are duplicated in the columns of interest
+  # (by subsetting on the columns not of interest and finding
+  # the ids for any duplicates in this set
+  df_sub = subset(df, select=!colnames(df) %in% cols)
+  dupes = df[, id][duplicated(df_sub)]
+  
+  # If dupes is empty, return unaltered df
+  if (length(dupes) == 0) {
+    
+    return(df)
+    
+  } else {
+    
+    # Subset data for observations with IDs that appear in dupes
+    df_dupes = df[df[, id] %in% dupes, ]
+    
+    # Remove this duplicated data from df
+    df_red <- anti_join(df, df_dupes, by=id)
+    
+    # Get list of columns with different values by sample, also 
+    # set any differing values to NA
+    DIFFERING_COLUMNS = c()
+    
+    for (s in dupes) {
+      temp = df_dupes[df_dupes[, id]==s, ]
+      bad_cols = c()
+      for (column in cols) {
+        temp_red = temp[, c(column, eval_cols)]
+        temp_red = unique(temp_red)
+        if (length(temp_red) != 1) {
+          bad_cols = c(bad_cols, column)
+          df_dupes[df_dupes[, id]==s, column] <- NA
+        }
+      }
+      
+      bad_cols = paste(bad_cols, collapse=", ")
+      DIFFERING_COLUMNS = c(DIFFERING_COLUMNS, bad_cols)
+      
+    }
+    
+    bad_df = data.frame(cbind(dupes, DIFFERING_COLUMNS))
+    names(bad_df)[names(bad_df)=="dupes"] <- id
+    
+    # Write results to csv
+    write.csv(bad_df, paste0(output_path, start_date_file, "_", end_date_file, "_NewSTEPs_", id, 
+                             "s duplicated in ", data_type, " data.csv"), row.names=FALSE)
+    
+    # Reduce df_dupes to unique values (now that NAs have overwritten
+    # differing records)
+    df_dupes = unique(df_dupes)
+    
+    # Join df_dupes back to df_red
+    df <- rbind(df_red, df_dupes)
+    
+    # Plural for message if bad_df has more than one row
+    plural <- ifelse(nrow(bad_df) == 1, "", "s")
+    verb <- ifelse(nrow(bad_df) == 1, "is", "are")
+    adj <- ifelse(nrow(bad_df) == 1, "this", "these")
+    
+    # Report out issue
+    message <- paste0("\nWARNING: ", length(dupes), " ", id, plural, " ", verb, 
+                      " listed more than once in the ", data_type, " data, which\nis caused by ", adj, " sample", plural, 
+                      " being associated with different values in ", col_text, 
+                      ". Information on ", adj, " sample", plural, " and the problematic column(s)\nis in your output folder in the '", 
+                      id, "s duplicated in ", data_type, " data' csv file. Also,\nany differing values have been overwritten with NA values and the duplicates\nhave been removed (although they still exist in the source data).\n")
+    
+    cat(message)
+    
+    # Return df
+    return(df)
+    
+  }
+}
+
 
 checkString <- function(cell_to_check, check_set) {
   
