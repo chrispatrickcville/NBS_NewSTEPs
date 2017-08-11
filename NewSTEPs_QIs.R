@@ -10,10 +10,6 @@ if (exists("crit_data")) {
   rm(crit_data)
 }
 
-# Convert start and end date for use in file titles
-start_date_file <- gsub("/", "-", start_date)
-end_date_file <- gsub("/", "-", end_date)
-
 # Read import file
 Monthly_Template <- suppressWarnings(read.csv(Monthly_Template_path))
 
@@ -33,8 +29,11 @@ if (!exists("QI_data")) {
 # Check that range of RECEIVEDATE dates overlaps the requested start and end date
 date_comp_check(QI_data, "sample")
 
-# Filter samples by desired dates for RECEIVEDATE and RECEIVED.DATE
+# Filter samples by desired dates for RECEIVEDATE
 QI_filter <- subset(QI_data, QI_data$RECEIVEDATE >= start_date & QI_data$RECEIVEDATE <= end_date)
+
+# Report and repair any cases where data is duplicated
+QI_filter <- report_and_repair_differences(QI_filter, "SAMPLEID", "sample")
 
 ##### Out of range data checking and preparation #####
 
@@ -87,11 +86,14 @@ crit_data_filter <- inner_join(crit_data, QI_filter[, c("SAMPLEID", "BIRTHDATE",
                                by = c("EXTERNAL_ID" = "SAMPLEID"))
 
 # Remove records with RECALL_FLAG = Y (this may change later)
-crit_data_filter <- crit_data_filter[crit_data_filter$RECALL_FLAG == "N", ]
+# crit_data_filter <- crit_data_filter[crit_data_filter$RECALL_FLAG == "N", ]
 
 # Reorganize columns and drop RECALL_FLAG column
 crit_data_filter <- crit_data_filter[, c("EXTERNAL_ID", "BIRTHDATE", "RECEIVEDATE", 
                                          "Date.of.Call", "combined")]
+
+# Report and repair any cases where data is duplicated
+crit_data_filter <- report_and_repair_differences(crit_data_filter, "EXTERNAL_ID", "critical reporting")
 
 # Find time differences in birth to report and receipt to report
 crit_data_filter$diff_days_birth2report <- crit_data_filter$Date.of.Call - crit_data_filter$BIRTHDATE
@@ -284,14 +286,14 @@ if (nrow(crits) > 0) {
   # Warning message if any values appear in misscrits
   if (sum(crits$misscrits != "") > 0 ) {
     number <- ifelse(sum(crits$misscrits != "") == 1, "sample has", "samples have")
-    cat(sprintf("\nWARNING: %s %s a subset of critical results that were not\nindicated as having been called out. See the 'Results not listed as reported\nout in CRIT data' column in output file ‘Difference_in_results_called.csv’\nfor details.\n",
+    cat(sprintf("\nWARNING: %s %s a subset of critical results that were not\nindicated as having been called out. See the 'Results not listed as reported\nout in CRIT data' column in output file 'Difference_in_results_called.csv'\nfor details.\n",
                 sum(crits$misscrits != ""), number))
   }
   
   # Warning message if any values appear in missQI
   if (sum(crits$missQI != "") > 0 ) {
     number <- ifelse(sum(crits$missQI != "") == 1, "sample has", "samples have")
-    cat(sprintf("\nWARNING: %s %s a subset of critical results that were called\nout but were not indicated as critical/critical group in the sample data source.\nSee the ‘Results not listed as being critical but were reported out' column in\noutput file ‘Difference_in_results_called.csv’ for details.\n",
+    cat(sprintf("\nWARNING: %s %s a subset of critical results that were called\nout but were not indicated as critical/critical group in the sample data source.\nSee the 'Results not listed as being critical but were reported out' column in\noutput file 'Difference_in_results_called.csv' for details.\n",
                 sum(crits$missQI != ""), number))     
   }
   
