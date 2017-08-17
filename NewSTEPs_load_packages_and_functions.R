@@ -532,7 +532,7 @@ report_and_repair_differences <- function(df, id, data_type) {
     names(bad_df)[names(bad_df)=="dupes"] <- id
     
     # Write results to csv
-    write.csv(bad_df, paste0(output_path, start_date_file, "_", end_date_file, "_NewSTEPs_", id, 
+    write.csv(bad_df, paste0(output_path, slash, start_date_file, "_", end_date_file, "_NewSTEPs_", id, 
                              "s duplicated in ", data_type, " data.csv"), row.names=FALSE)
     
     # Reduce df_dupes to unique values (now that NAs have overwritten
